@@ -1,0 +1,22 @@
+---
+title: "Hydro data cleaning"
+author: "Biz Yoder"
+date: "2023-04-04"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,tidy.opts=list(width.cutoff=80), tidy=FALSE) 
+```
+
+```{r}
+#Import libraries
+library(readxl) #import excel
+library(dplyr) #pipes
+library(forecast) #time series 
+```
+
+```{r}
+#Import load data
+load <- read_excel(path="./Data/load.xlsx")
+```
