@@ -3,6 +3,8 @@ title: "Hydro data cleaning"
 author: "Biz Yoder"
 date: "2023-04-04"
 output: pdf_document
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
@@ -15,6 +17,11 @@ library(readxl) #import excel
 library(dplyr) #pipes
 library(forecast) #time series 
 library(reshape2) #reshaping data
+library(lubridate) #to deal with dates
+library(tidyverse) #data wrangling
+library(ggplot2) #for plotting
+library(outliers) #to detect and deal with outliers
+library(zoo)
 ```
 
 ```{r}
@@ -44,7 +51,49 @@ daily_data <- bind_rows(all_hydro[1:7])
 print(paste('The first date is in the combined daily dataframe is', head(daily_data$Date,1)))
 
 print(paste('and the last date is', tail(daily_data$Date,1)))
+
+daily_data$Date <- ymd(daily_data$Date)
+
+#Add column for total amount generated
+daily_data$total <- rowSums(daily_data[,2:6])
+
+#Check for outliers
+pvalue <- 0
+daily_clean <- daily_data$total
+nout <- 0
+while(pvalue < 0.05){
+  out_test <- grubbs.test(daily_clean, type=10)
+  pvalue <- out_test$p.value
+  
+  if(pvalue < 0.05){
+    daily_clean <- rm.outlier(daily_clean,fill=TRUE)
+    nout <- nout+1
+  }
+}
+cat("Number of outliers removed: ",nout,"\n")
+
+daily_data$total <- daily_clean
+boxplot(daily_data$total)$out
+
+#Ad column for month to create monthly averages
+daily_data$month <- months(daily_data$Date)
+daily_data$year <- format(daily_data$Date, format="%Y")
+
+#Create dataframe with monthly average generation
+monthly_data <- daily_data %>%
+  filter(!is.na(total)) %>%
+  group_by(year(Date), month(Date)) %>%
+  summarise(monthly_generation = mean(total))
+
+names(monthly_data) <- c("year", "month", "generation")
+
+monthly_data$date <- make_date(year=monthly_data$year, month = monthly_data$month)
+
+monthly_data <- cbind.data.frame(monthly_data$date, monthly_data$generation)
+names(monthly_data) <- c("Date", "Total generation")
+
 ```
+
 ```{r}
 #Import nighttime lights data
 lights <- read.csv("./Data/nighttime_lights.csv")
@@ -66,8 +115,48 @@ rad_long$date <- rad_long$variable %>%
 
 ##Convert date column to datetime
 rad_long$Date <- as.POSIXct(rad_long$date)
+
+##Create one clean data frame of nighttime lights
+
+nightlights <- cbind.data.frame(rad_long$Date, rad_long$NAME_1, rad_long$radiance)
+names(nightlights) <- c("Date", "District", "Radiation")
+
+##reshape back to wide format
+
+nightlights_bydistrict <- reshape(nightlights, idvar="Date", timevar = "District", direction = "wide")
 ```
 
+```{r}
+##Visualize hydro generation over time -- convert to time series
+
+ts_hydro_monthly <- ts(monthly_data[,2], frequency=12, start=c(2012, 01, 01), end=c(2018, 10, 01))
+
+autoplot(ts_hydro_monthly)
+
+ts_hydro_daily <- msts(daily_data$total, seasonal.periods = c(7, 365.25), start=c(2012, 01, 01))
+
+autoplot(ts_hydro_daily)
+
+ts_hydro_monthly %>% decompose() %>%
+  autoplot()
+
+ts_hydro_daily %>% mstl() %>%
+  autoplot()
+```
+
+
+To do - calculate capacity factor; run regression analysis for lagged hydro and nightime lights radiance (**HOW LONG SHOULD THE LAG BE?**)
+```{r}
+monthly_data_truncated <- monthly_data[4:81,]
+
+#this isn't the right regression to run -- was just curious
+print(summary(lm(nightlights_bydistrict$Radiation.Nsanje ~ monthly_data_truncated$`Total generation`)))
+
+print(summary(lm(nightlights_bydistrict$Radiation.Mulanje ~ monthly_data_truncated$`Total generation`)))
+
+print(summary(lm(nightlights_bydistrict$Radiation.Thyolo ~ monthly_data_truncated$`Total generation`)))
+
+```
 
 
 ```
