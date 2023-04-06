@@ -14,9 +14,60 @@ knitr::opts_chunk$set(echo = TRUE,tidy.opts=list(width.cutoff=80), tidy=FALSE)
 library(readxl) #import excel
 library(dplyr) #pipes
 library(forecast) #time series 
+library(reshape2) #reshaping data
 ```
 
 ```{r}
 #Import load data
-load <- read_excel(path="./Data/load.xlsx")
+multiplesheets <- function(fname) {
+  ##get all sheet names
+  sheets <- readxl::excel_sheets(fname)
+  ##read in each sheet
+  tibble <- lapply(sheets, function(x) readxl::read_excel(fname, sheet = x))
+  ##convert data to df
+  data_frame <- lapply(tibble, as.data.frame)
+  ##name df
+  names(data_frame) <- sheets
+  ##return df
+  print(data_frame)
+}
+  
+path <- "./Data/EGENCO Daily Generation Data.xlsx"
+all_hydro <- multiplesheets(path)
+```
+
+```{r}
+#Combine all daily dfs for each year into one df
+daily_data <- bind_rows(all_hydro[1:7])
+
+#Check first and last dates in df
+print(paste('The first date is in the combined daily dataframe is', head(daily_data$Date,1)))
+
+print(paste('and the last date is', tail(daily_data$Date,1)))
+```
+```{r}
+#Import nighttime lights data
+lights <- read.csv("./Data/nighttime_lights.csv")
+```
+
+```{r}
+#Format nighttime lights data
+##Subset df to only include radiance columns and district name
+rad_data <- select(lights,contains("20")) #all radiance columns are named with date
+rad_data$NAME_1 <- lights$NAME_1 #add district name column
+
+##Format df from wide to long
+rad_long <- melt(rad_data, na.rm = FALSE, value.name = 'radiance', id = 'NAME_1')
+
+##Reformat date column to datetime object
+rad_long$date <- rad_long$variable %>%
+  gsub("X", "", .) %>% #remove the X infront of the date
+  gsub("(\\d{4})(\\d{2})(\\d{2})$","\\1-\\2-\\3",.) #add -'s to the date
+
+##Convert date column to datetime
+rad_long$Date <- as.POSIXct(rad_long$date)
+```
+
+
+
 ```
