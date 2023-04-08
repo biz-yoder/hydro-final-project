@@ -22,6 +22,10 @@ library(tidyverse) #data wrangling
 library(ggplot2) #for plotting
 library(outliers) #to detect and deal with outliers
 library(zoo)
+library(margins) #for regression analysis
+library(stargazer) #for tables
+library(describedata) #for visualizing variable transformations
+library(gtools)
 ```
 
 ```{r}
@@ -52,10 +56,12 @@ print(paste('The first date is in the combined daily dataframe is', head(daily_d
 
 print(paste('and the last date is', tail(daily_data$Date,1)))
 
+daily_data = daily_data[complete.cases(daily_data[ , 2:6]),] 
+
 daily_data$Date <- ymd(daily_data$Date)
 
 #Add column for total amount generated
-daily_data$total <- rowSums(daily_data[,2:6])
+daily_data$total <- rowSums(daily_data[,2:6], na.rm = TRUE)
 
 #Check for outliers
 pvalue <- 0
@@ -75,7 +81,7 @@ cat("Number of outliers removed: ",nout,"\n")
 daily_data$total <- daily_clean
 boxplot(daily_data$total)$out
 
-#Ad column for month to create monthly averages
+#Add column for month to create monthly averages
 daily_data$month <- months(daily_data$Date)
 daily_data$year <- format(daily_data$Date, format="%Y")
 
@@ -127,36 +133,153 @@ nightlights_bydistrict <- reshape(nightlights, idvar="Date", timevar = "District
 ```
 
 ```{r}
+##Import csv with plant capacity factors
+
+capacity <- read.csv("./Data/capacity.csv")
+capacity$date <- make_date(year = capacity$year, month = capacity$month)
+capacity$total <- rowSums(capacity[,3:6], na.rm = TRUE)
+capacity <- capacity[1:78,]
+
+#capacity factor = total generation/(capacity*time)
+monthly_data_cf <- monthly_data[5:82,]
+capacity$cf_total <- ((monthly_data_cf$`Total generation`)/1000)/((capacity$total)*24)
+
+```
+
+```{r}
+analysis_data <- cbind.data.frame(capacity$date, capacity$cf_total, monthly_data_cf$`Total generation`)
+
+nightlights_foranalysis <- nightlights_bydistrict[2:74,]
+analysis_data <- analysis_data[1:73,]
+analysis_data <- cbind.data.frame(analysis_data, nightlights_foranalysis[,2:29])
+analysis_data$totalradiation <- rowSums(analysis_data[,4:31], na.rm = TRUE)
+names(analysis_data) <- c("Date", "Capacity_factor", "Total_generation", "Nsanje", "Mulanje", "Thyolo", "Chikwawa", "Blantyre", "Chiradzulu", "Zomba", "Neno", "Mwanza", "Balaka", "Ntcheu", "Machinga", "Phalombe", "Mangochi", "Dedza", "Salima", "Nkhotakota", "Likoma", "Nkhata_Bay", "Rumphi", "Karonga", "Chitipa", "Mzimba", "Mchinji", "Kasungu", "Ntchisi", "Dowa", "Lilongwe", "Total_radiance")
+
+#Visualize potential transformations of variables
+gladder(analysis_data$Total_radiance) # should log transform
+analysis_data$ln_radiance <- log(analysis_data$Total_radiance)
+gladder(analysis_data$Total_generation)
+gladder(analysis_data$Capacity_factor)
+
+#Plot capacity factor & ln(total radiance)
+ggplot(data=analysis_data)+
+  geom_point(aes(x=Capacity_factor, y=ln_radiance), size=1.5, alpha=0.5)+
+  geom_abline(intercept = 0)+
+  stat_smooth(aes(x=Capacity_factor, y=ln_radiance), method = "lm", formula = y ~ x, size = 1)+
+  xlab("Monthly capacity factor")+
+  ylab("Monthly NTL radiance \n in urban areas")
+
+#Create district level total radiance
+analysis_data$northern_radiance <- analysis_data$Chitipa + analysis_data$Karonga + analysis_data$Likoma + analysis_data$Mzimba + analysis_data$Nkhata_Bay + analysis_data$Rumphi
+
+analysis_data$central_radiance <- analysis_data$Dedza + analysis_data$Dowa + analysis_data$Kasungu + analysis_data$Lilongwe + analysis_data$Mchinji + analysis_data$Nkhotakota + analysis_data$Ntcheu + analysis_data$Ntchisi + analysis_data$Salima
+
+analysis_data$southern_radiance <- analysis_data$Balaka + analysis_data$Blantyre + analysis_data$Chikwawa + analysis_data$Chikwawa + analysis_data$Chiradzulu + analysis_data$Machinga + analysis_data$Mangochi + analysis_data$Mulanje + analysis_data$Mwanza + analysis_data$Nsanje + analysis_data$Thyolo + analysis_data$Zomba + analysis_data$Neno
+
+analysis_data$ln_northern <- log(analysis_data$northern_radiance)
+analysis_data$ln_southern <- log(analysis_data$southern_radiance)
+analysis_data$ln_central <- log(analysis_data$central_radiance)
+
+total <- "log(Total_radiance) ~ Capacity_factor"
+ols_total <- lm(total, data=analysis_data)
+summary(ols_total, robust=TRUE)
+summary(margins(ols_total))
+
+
+north <- "ln_northern ~ Capacity_factor"
+ols_north <- lm(north, data=analysis_data)
+summary(ols_north, robust=TRUE)
+summary(margins(ols_north))
+
+south <- "ln_southern ~ Capacity_factor"
+ols_south <- lm(south, data=analysis_data)
+summary(ols_south, robust=TRUE)
+summary(margins(ols_south))
+
+central <- "ln_central ~ Capacity_factor"
+ols_central <- lm(central, data=analysis_data)
+summary(ols_central, robust=TRUE)
+summary(margins(ols_central))
+
+radiance_byregion <- "ln_radiance ~ Capacity_factor + ln_northern + ln_southern + ln_central"
+ols_region <- lm(radiance_byregion, data=analysis_data)
+summary(ols_region, robust=TRUE)
+summary(margins(ols_region))
+
+radiance_cities <- "ln_radiance ~  log(Lilongwe) + log(Blantyre) "
+ols_cities <- lm(radiance_cities, data=analysis_data)
+summary(ols_cities, robust=TRUE)
+summary(margins(ols_cities))
+
+
+plot(margins(ols_total))
+plot(margins(ols_north))
+plot(margins(ols_south))
+plot(margins(ols_central))
+
+
+stargazer(ols_total, ols_north, ols_south, ols_central, type = "latex", dep.var.labels = "nightime light radiance")
+
+```
+
+
+
+```{r}
 ##Visualize hydro generation over time -- convert to time series
 
-ts_hydro_monthly <- ts(monthly_data[,2], frequency=12, start=c(2012, 01, 01), end=c(2018, 10, 01))
+ts_hydro_monthly <- ts(analysis_data[,3], frequency=12, start=c(2012, 05, 01), end=c(2018, 05, 01))
 
 autoplot(ts_hydro_monthly)
+
+ts_cf_monthly <- ts(analysis_data[,2], frequency=12, start=c(2012, 05, 01), end=c(2018, 05, 01))
+
+autoplot(ts_cf_monthly)
 
 ts_hydro_daily <- msts(daily_data$total, seasonal.periods = c(7, 365.25), start=c(2012, 01, 01))
 
 autoplot(ts_hydro_daily)
 
+ts_radiance_monthly <- ts(analysis_data$Total_radiance, frequency=12, start=c(2012, 05, 01), end=c(2018, 05, 01))
+
+autoplot(ts_radiance_monthly)
+
 ts_hydro_monthly %>% decompose() %>%
+  autoplot()
+
+ts_cf_monthly %>% decompose() %>%
+  autoplot()
+
+ts_radiance_monthly %>% decompose() %>%
   autoplot()
 
 ts_hydro_daily %>% mstl() %>%
   autoplot()
+
+#Transform generation data so it can be visualized with radiance data (/100)
+analysis_data$generation_scaled <- analysis_data$Total_generation/100
+#Transform generation data so it can be visualized with ln(radiance) (/10000)
+analysis_data$generation_lnscaled <- (analysis_data$Total_generation/1000000)*2
+
+
+ggplot(analysis_data, aes(x=analysis_data[,1]))+
+  geom_line(aes(y=analysis_data[,40], color="Total Generation"))+
+  geom_line(aes(y=analysis_data[,32], color="Total Radiance"))+
+  xlab("Month, Year")+
+  ylab("")+
+  ggtitle("Hydropower generation and radiance over time")+
+  labs(color="")
+
+ggplot(analysis_data, aes(x=analysis_data[,1]))+
+  geom_line(aes(y=analysis_data[,41], color="Total Generation"))+
+  geom_line(aes(y=analysis_data[,33], color="Total Radiance, log"))+
+  xlab("Month, Year")+
+  ylab("")+
+  ggtitle("Hydropower generation and log radiance over time")+
+  labs(color="")
+
+plot(ccf(ts_cf_monthly, ts_radiance_monthly, 50))
 ```
 
 
-To do - calculate capacity factor; run regression analysis for lagged hydro and nightime lights radiance (**HOW LONG SHOULD THE LAG BE?**)
-```{r}
-monthly_data_truncated <- monthly_data[4:81,]
+To do - run regression analysis for lagged hydro and nighttime lights radiance (**HOW LONG SHOULD THE LAG BE?**)
 
-#this isn't the right regression to run -- was just curious
-print(summary(lm(nightlights_bydistrict$Radiation.Nsanje ~ monthly_data_truncated$`Total generation`)))
-
-print(summary(lm(nightlights_bydistrict$Radiation.Mulanje ~ monthly_data_truncated$`Total generation`)))
-
-print(summary(lm(nightlights_bydistrict$Radiation.Thyolo ~ monthly_data_truncated$`Total generation`)))
-
-```
-
-
-```
